@@ -3,12 +3,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Motion Blur WebGPU Demo</title>
+    <title>Three.js WebGPU Motion Blur Demo</title>
     <style>
-        /* CSS from the original snippet */
+        /* CSS for checkered background, fullscreen canvas, and title */
         html,body {
             margin: 0;
-            overflow: hidden; /* Prevent scrollbars */
+            overflow: hidden; 
             background: repeating-conic-gradient(#ccc 0% 25%,#fff 0% 50%) 0 0 / 16px 16px;
         }
         canvas {
@@ -40,7 +40,7 @@
                 "three": "https://unpkg.com/three@~0.181/build/three.webgpu.js",
                 "three/webgpu": "https://unpkg.com/three@~0.181/build/three.webgpu.js",
                 "three/addons/": "https://unpkg.com/three@~0.181/examples/jsm/",
-                /* The custom YCW_tsl_x library is necessary for bump_field2d and ndc_displacement2d */
+                /* Custom library containing TSL extensions for noise and displacement */
                 "YCW_tsl_x": "https://cdn.jsdelivr.net/gh/ycw/tsl-x@5f97a5e8d753d16cefa5ab01036475a92ee51bfd/src/index.js",
                 "three/tsl": "https://unpkg.com/three@~0.181/build/three.tsl.js"
             }
@@ -60,14 +60,15 @@
 
         // --- Core Setup ---
         const gui = new GUI();
-        // Initialize WebGPURenderer and ensure it's ready
+        // Initialize WebGPURenderer (requires WebGPU-compatible browser)
         const renderer = await new THREE.WebGPURenderer().init();
         const scene = new THREE.Scene();
+        // Use window size for aspect ratio in PerspectiveCamera
         const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 10);
         const controls = new OrbitControls(camera, renderer.domElement);
 
         camera.position.set(2, 2, 2);
-        controls.enableDamping = true;
+        controls.enableDamping = true; // Smooth camera movement
 
         // --- Lighting ---
         scene.add(new THREE.PointLight('white', 2, 2, 2));
@@ -76,43 +77,46 @@
         // --- Deformable Plane Mesh ---
         const mat = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide });
         
-        // Create the geometry and rotate it to face upwards
+        // Create a subdivided plane and rotate it flat (on XZ plane)
         const plane = new THREE.Mesh(
             new THREE.PlaneGeometry(3, 3, 200, 200).rotateX(-Math.PI / 2), 
             mat
         );
         scene.add(plane);
 
-        // TSL Functions for Deformations
+        // TSL (Three.js Shader Language) for Dynamic Material
+        // Height function based on UV coordinates, time, and noise
         const height_fn = (p) => $.mx_noise_float(p.mul(3).add($.time.mul(2)), 0.5);
         const p = $.uv();
         
-        // Apply TSL to Material Nodes
+        // Apply TSL to Material Nodes:
+        // 1. Deform vertex position (Y-axis based on height_fn)
         mat.positionNode = $.positionLocal.add($.vec3(0, height_fn(p), 0));
+        // 2. Compute correct normal for lighting (using TSL extension)
         mat.normalNode = $$.bump_field2d(height_fn, p);
-        mat.colorNode = $.uv().x.mul(5).fract().step(0.1).rrr; // Vertical stripes color
+        // 3. Set color (vertical stripes)
+        mat.colorNode = $.uv().x.mul(5).fract().step(0.1).rrr;
 
         // --- Post-Processing Setup ---
         const pp = new THREE.PostProcessing(renderer);
 
-        // Motion Blur Configuration (uses a custom method for velocity/displacement)
+        // Motion Blur Configuration
         { 
             const displacement_scale = $.uniform(16);
             const motionblur_samples = $.uniform(16);
             
-            // 1. Render Scene to a Texture
+            // 1. Render Scene to a texture (MRT - Multiple Render Target)
             const pass = $.pass(scene, camera);
             pass.setMRT($.mrt({ output: $.output }));
 
-            // 2. DIY Velocity/Displacement Calculation
-            // $$.ndc_displacement2d approximates velocity needed for motion blur
+            // 2. Calculate displacement (proxy for velocity)
             const displacement = $$.ndc_displacement2d(pass).mul(displacement_scale); 
             const output = pass.getTextureNode('output');
 
-            // 3. Apply Motion Blur
+            // 3. Apply Motion Blur effect
             pp.outputNode = motionBlur(output, displacement, motionblur_samples);
             
-            // GUI Controls
+            // GUI Controls for user adjustment
             gui.add(displacement_scale, 'value', 0, 100, 1).name('displacement_scale');
             gui.add(motionblur_samples, 'value', 1, 100, 1).name('motionblur_samples');
         }
@@ -120,7 +124,7 @@
         // --- Animation Loop ---
         renderer.setAnimationLoop(() => {
             controls.update();
-            pp.render(); // Render the scene with the motion blur effect
+            pp.render(); // Executes scene render and post-processing
         });
 
         // --- Event Listeners ---
@@ -132,7 +136,7 @@
         };
 
         window.addEventListener('resize', onResize);
-        onResize(); // Initial call to set size
+        onResize(); // Set initial size
 
         document.body.prepend(renderer.domElement);
     </script>
