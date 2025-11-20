@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Motion Blur WebGPU Demo</title>
+    <style>
+        /* CSS from the original snippet */
+        html,body {
+            margin: 0;
+            overflow: hidden; /* Prevent scrollbars */
+            background: repeating-conic-gradient(#ccc 0% 25%,#fff 0% 50%) 0 0 / 16px 16px;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100vh;
+            cursor: grab;
+        }
+        h1 {
+            position: fixed;
+            top: 0;
+            left: 0;
+            padding: 1em;
+            margin: 1em;
+            background: #fffb;
+            backdrop-filter: blur(2px);
+            font-family: sans-serif;
+            font-size: 1.2em;
+            z-index: 10;
+        }
+        h1 a {
+            color: #333;
+            text-decoration: none;
+        }
+    </style>
+    <script type='importmap'>
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@~0.181/build/three.webgpu.js",
+                "three/webgpu": "https://unpkg.com/three@~0.181/build/three.webgpu.js",
+                "three/addons/": "https://unpkg.com/three@~0.181/examples/jsm/",
+                /* The custom YCW_tsl_x library is necessary for bump_field2d and ndc_displacement2d */
+                "YCW_tsl_x": "https://cdn.jsdelivr.net/gh/ycw/tsl-x@5f97a5e8d753d16cefa5ab01036475a92ee51bfd/src/index.js",
+                "three/tsl": "https://unpkg.com/three@~0.181/build/three.tsl.js"
+            }
+        }
+    </script>
+</head>
+<body>
+    <h1><a href='https://x.com/ycwhk' target='_top'>motionblur</a></h1>
+    
+    <script type='module'>
+        import * as THREE from 'three/webgpu';
+        import { TSL as $ } from 'three/webgpu';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+        import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+        import { motionBlur } from 'three/addons/tsl/display/MotionBlur.js';
+        import * as $$ from 'YCW_tsl_x'; // Custom TSL utilities
+
+        // --- Core Setup ---
+        const gui = new GUI();
+        // Initialize WebGPURenderer and ensure it's ready
+        const renderer = await new THREE.WebGPURenderer().init();
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 10);
+        const controls = new OrbitControls(camera, renderer.domElement);
+
+        camera.position.set(2, 2, 2);
+        controls.enableDamping = true;
+
+        // --- Lighting ---
+        scene.add(new THREE.PointLight('white', 2, 2, 2));
+        scene.add(new THREE.HemisphereLight('skyblue', 'brown', 3));
+
+        // --- Deformable Plane Mesh ---
+        const mat = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide });
+        
+        // Create the geometry and rotate it to face upwards
+        const plane = new THREE.Mesh(
+            new THREE.PlaneGeometry(3, 3, 200, 200).rotateX(-Math.PI / 2), 
+            mat
+        );
+        scene.add(plane);
+
+        // TSL Functions for Deformations
+        const height_fn = (p) => $.mx_noise_float(p.mul(3).add($.time.mul(2)), 0.5);
+        const p = $.uv();
+        
+        // Apply TSL to Material Nodes
+        mat.positionNode = $.positionLocal.add($.vec3(0, height_fn(p), 0));
+        mat.normalNode = $$.bump_field2d(height_fn, p);
+        mat.colorNode = $.uv().x.mul(5).fract().step(0.1).rrr; // Vertical stripes color
+
+        // --- Post-Processing Setup ---
+        const pp = new THREE.PostProcessing(renderer);
+
+        // Motion Blur Configuration (uses a custom method for velocity/displacement)
+        { 
+            const displacement_scale = $.uniform(16);
+            const motionblur_samples = $.uniform(16);
+            
+            // 1. Render Scene to a Texture
+            const pass = $.pass(scene, camera);
+            pass.setMRT($.mrt({ output: $.output }));
+
+            // 2. DIY Velocity/Displacement Calculation
+            // $$.ndc_displacement2d approximates velocity needed for motion blur
+            const displacement = $$.ndc_displacement2d(pass).mul(displacement_scale); 
+            const output = pass.getTextureNode('output');
+
+            // 3. Apply Motion Blur
+            pp.outputNode = motionBlur(output, displacement, motionblur_samples);
+            
+            // GUI Controls
+            gui.add(displacement_scale, 'value', 0, 100, 1).name('displacement_scale');
+            gui.add(motionblur_samples, 'value', 1, 100, 1).name('motionblur_samples');
+        }
+
+        // --- Animation Loop ---
+        renderer.setAnimationLoop(() => {
+            controls.update();
+            pp.render(); // Render the scene with the motion blur effect
+        });
+
+        // --- Event Listeners ---
+        const onResize = () => {
+            renderer.setPixelRatio(devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight, false);
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+        };
+
+        window.addEventListener('resize', onResize);
+        onResize(); // Initial call to set size
+
+        document.body.prepend(renderer.domElement);
+    </script>
+</body>
+</html>
